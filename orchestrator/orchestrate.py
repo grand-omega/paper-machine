@@ -43,9 +43,10 @@ _cumulative_cost_equiv: float = 0.0
 
 RESET_POLICY: dict[str, str] = {
     "literature-reviewer": "hot",              # accumulated paper knowledge
+    "planner":             "hard_every_round", # fresh strategy each round
     "experimenter":        "soft_between_rounds",
     "paper-writer":        "hot",              # needs continuity across drafts
-    "reviewer":            "hard_every_draft", # fresh eyes
+    "reviewer":            "hard_every_draft", # fresh eyes each draft
 }
 
 
@@ -53,30 +54,23 @@ RESET_POLICY: dict[str, str] = {
 # Agent registry
 # --------------------------------------------------------------------------
 
+ROLE_NAMES = (
+    "literature-reviewer",
+    "planner",
+    "experimenter",
+    "paper-writer",
+    "reviewer",
+)
+
+
 def build_agents() -> dict[str, PersistentAgent]:
-    """All four roles. Tool allowlists are additionally enforced by .claude/settings.json."""
-    return {
-        "literature-reviewer": PersistentAgent(
-            name="literature-reviewer",
-            allowed_tools=["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
-            model="sonnet",  # reading and summarizing — sonnet is fine
-        ),
-        "experimenter": PersistentAgent(
-            name="experimenter",
-            allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Skill"],
-            model="opus",   # actual engineering — keep opus
-        ),
-        "paper-writer": PersistentAgent(
-            name="paper-writer",
-            allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Skill"],
-            model="opus",
-        ),
-        "reviewer": PersistentAgent(
-            name="reviewer",
-            allowed_tools=["Read", "Glob", "Grep", "Write"],  # write only review.md
-            model="opus",
-        ),
-    }
+    """All roles, loaded from `.claude/agents/<name>.md`.
+
+    Single source of truth: the markdown file defines the role prompt, tool
+    allowlist, and model. `.claude/settings.json` further restricts at the
+    permission layer. To add/change a role, edit the markdown.
+    """
+    return {name: PersistentAgent.from_markdown(name) for name in ROLE_NAMES}
 
 
 # --------------------------------------------------------------------------
@@ -179,10 +173,12 @@ async def run_agent_turn(
     agent: PersistentAgent,
     instruction: str,
     budget: MessageWindow,
-    *,
-    system_prompt: str | None = None,
 ) -> None:
-    """Send one instruction to an agent, streaming events to console + jsonl."""
+    """Send one instruction to an agent, streaming events to console + jsonl.
+
+    The agent's role prompt (from `.claude/agents/<name>.md`) is always
+    injected — no per-call system_prompt parameter needed.
+    """
     # Wait for rate-limit window if needed
     if budget.at_limit(agent.model):
         delay = budget.wait_until_free(agent.model)
@@ -194,7 +190,7 @@ async def run_agent_turn(
     emit("agent.turn_start", agent=agent.name, model=agent.model, instruction_preview=instruction[:500])
     budget.record(agent.name, agent.model)
 
-    async for event in agent.send(instruction, system_prompt=system_prompt):
+    async for event in agent.send(instruction):
         render_event(agent.name, event)
 
     emit("agent.turn_end", agent=agent.name)
@@ -212,30 +208,37 @@ async def phase_literature_review(agents: dict, budget: MessageWindow) -> None:
     await run_agent_turn(agents["literature-reviewer"], instruction, budget)
 
 
-async def phase_propose_experiments(agents: dict, budget: MessageWindow, round_num: int, target: int) -> None:
-    console.rule(f"[bold green]Phase: Propose Experiments (round {round_num})[/bold green]")
+async def phase_plan(agents: dict, budget: MessageWindow, round_num: int, target: int) -> None:
+    """Planner designs experiments; experimenter later implements them."""
+    console.rule(f"[bold green]Phase: Plan experiments (round {round_num})[/bold green]")
+    # Fresh eyes each round — policy says hard_every_round, but explicit is clearer.
+    await agents["planner"].hard_reset()
+    emit("reset", agent="planner", kind="hard_every_round", round=round_num)
+
     instruction = (
-        f"Round {round_num}. Propose up to {target} NEW experiments that advance the foothold.\n\n"
-        f"First, query state/experiments.sqlite to see what's already been proposed or completed — "
-        f"do not duplicate. Then insert new rows with status='proposed' via "
-        f"`python -m orchestrator.state --propose --round {round_num} --hypothesis '...' --method '...' --metric '...'`.\n\n"
-        f"Return the list of proposed experiment IDs."
+        f"Round {round_num}. Read foothold.md and state/literature_review.md. "
+        f"Query state/experiments.sqlite for prior experiments and lessons. "
+        f"Propose up to {target} NEW experiments that advance the research question. "
+        f"Do not duplicate existing proposed/completed experiments. "
+        f"Use `uv run python -m orchestrator.state --propose --round {round_num} ...` "
+        f"for each proposal. Return the UUIDs + a one-sentence rationale per experiment."
     )
-    await run_agent_turn(agents["experimenter"], instruction, budget)
+    await run_agent_turn(agents["planner"], instruction, budget)
 
 
 async def phase_run_experiments(agents: dict, budget: MessageWindow) -> None:
+    """Experimenter implements and runs whatever the planner proposed."""
     pending = list_by_status("proposed")
     if not pending:
-        console.print("[yellow]No proposed experiments. Skipping execution.[/yellow]")
+        console.print("[yellow]No proposed experiments (planner skipped or cap reached). Skipping execution.[/yellow]")
         return
 
-    console.rule(f"[bold green]Phase: Run Experiments ({len(pending)} pending)[/bold green]")
-    # The experimenter agent handles its own loop across experiments — we just
-    # nudge it. It uses the run-experiment skill for each.
+    console.rule(f"[bold green]Phase: Run experiments ({len(pending)} pending)[/bold green]")
     instruction = (
-        "Run all experiments currently in status='proposed'. For each, use the run-experiment skill. "
-        "Accumulate lessons in lessons_learned as you go. Return a summary of outcomes."
+        "Run all experiments currently in status='proposed'. For each: implement "
+        "experiments/<id>/run.py per its hypothesis+method+metric, then invoke the "
+        "run-experiment skill. Append lessons to lessons_learned. "
+        "Return a summary of outcomes (IDs, pass/fail, key numbers)."
     )
     await run_agent_turn(agents["experimenter"], instruction, budget)
 
@@ -299,7 +302,7 @@ async def run_round(config: Config, round_num: int, agents: dict, budget: Messag
 
     await maybe_soft_reset(agents, round_num)
     await phase_literature_review(agents, budget)
-    await phase_propose_experiments(agents, budget, round_num, config.experiments_per_round)
+    await phase_plan(agents, budget, round_num, config.experiments_per_round)
     await phase_run_experiments(agents, budget)
 
     for rev in range(1, config.max_review_iterations + 1):

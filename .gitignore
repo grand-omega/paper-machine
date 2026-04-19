@@ -6,6 +6,9 @@ events.jsonl
 logs/
 *.log
 
+# Market-data cache (refetched via yfinance on first run of a fresh project)
+data/
+
 # Python
 __pycache__/
 *.pyc

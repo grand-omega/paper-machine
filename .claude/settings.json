@@ -19,9 +19,13 @@
       "Bash(uv:*)",
       "Bash(pytest:*)",
       "Bash(ruff:*)",
+      "Bash(sqlite3:*)",
       "Bash(pdflatex:*)",
       "Bash(bibtex:*)",
       "Bash(latexmk:*)",
+      "Bash(biber:*)",
+      "Bash(pdftotext:*)",
+      "Bash(kpsewhich:*)",
       "Bash(mkdir:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
@@ -35,7 +39,9 @@
       "Bash(pdfinfo:*)",
 
       "Skill(run-experiment)",
-      "Skill(compile-latex)"
+      "Skill(compile-latex)",
+
+      "WebFetch(domain:*)"
     ],
     "deny": [
       "Edit(foothold.md)",

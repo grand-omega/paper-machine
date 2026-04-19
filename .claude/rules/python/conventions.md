@@ -18,8 +18,42 @@ paths:
 `uv run` activates `.venv/` transparently. Bare `python` happens to resolve to the
 venv when env is inherited cleanly, but don't rely on it — be explicit.
 
-To add a dependency: `uv add <pkg>` (writes to `pyproject.toml` + `uv.lock`, then
-`uv sync`). Never `pip install` anything.
+To add a dep, use `uv add <pkg>`. Never `pip install` anything.
+
+**Default stance: permissive.** If you need a widely-used, well-maintained
+scientific/visualization library to do the job well, add it. Don't hobble
+the output for no reason.
+
+**Good candidates to add without asking:**
+
+- Visualization: `matplotlib`, `seaborn`, `plotly`
+- Scientific: `scipy`, `statsmodels`, `scikit-learn`
+- Utilities: `tqdm`, `joblib`, `pyarrow`
+- Data: `yfinance`, `requests`, `beautifulsoup4` (if the foothold's domain needs)
+- Plotting math: `sympy`
+
+**Check the foothold before adding**:
+
+- Domain-specific ML libraries (`torch`, `jax`, `transformers`) — usually fine
+  but they're big; note in your response when pulling them in
+- Anything the foothold's **"out of scope" section explicitly forbids** — if
+  the foothold says "no deep learning," don't add torch. Surface to the
+  orchestrator instead.
+
+**Never add:**
+
+- Anything that introduces a hard external dependency (paid API clients,
+  proprietary binaries, platform-specific tooling) without flagging it
+- Development-only tooling (`black`, `pytest`, `ipython`) unless explicitly
+  needed for the work — keep runtime deps lean
+
+**Already installed (as of current `pyproject.toml`):**
+
+- `rich` — orchestrator's UI (don't import in experiment scripts)
+- `yfinance`, `pandas`, `numpy`, `matplotlib` — project standard
+
+Use `uv add <pkg>` freely within these rules. Always write imports explicitly
+in scripts; don't rely on transitive imports.
 
 ## Style
 

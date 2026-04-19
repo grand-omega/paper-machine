@@ -56,6 +56,14 @@ run-rounds N:
 experiments:
     uv run python -m orchestrator.state --dump
 
+# fetch QQQM historical data (for quant-trading foothold). Writes data/qqqm.csv.
+# Idempotent: safe to re-run whenever you want a fresh snapshot.
+# Strips timezone and drops the index so `pd.read_csv('data/qqqm.csv',
+# parse_dates=['Date'])` just works.
+fetch-qqqm:
+    @mkdir -p data
+    uv run python -c "import yfinance as yf; df = yf.Ticker('QQQM').history(period='max', auto_adjust=True); df.index = df.index.tz_localize(None); df = df.reset_index(); df.to_csv('data/qqqm.csv', index=False); print(f'✓ wrote data/qqqm.csv ({len(df)} rows, {df.Date.iloc[0].date()} → {df.Date.iloc[-1].date()})')"
+
 # hard-reset a specific agent (wipes its session UUID; next call starts fresh)
 reset-agent NAME:
     rm -f .agent_state/{{NAME}}.session

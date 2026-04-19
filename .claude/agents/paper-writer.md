@@ -29,6 +29,29 @@ All numerical claims MUST reference SQLite:
 
 Use the `run-experiment` skill's helper `paper_data` query to fetch results. Do NOT hand-copy numbers from the orchestrator's output.
 
+## Figures and plots — use matplotlib
+
+Make real figures. `matplotlib` is installed. If you need something it
+can't do, `uv add seaborn` or `uv add plotly` — don't fall back to
+plain TikZ unless the figure is genuinely simple (bar chart of 3 values).
+
+Save figures as PDF in `paper/figures/` (TikZ or matplotlib — either is
+fine, but match Research-style formatting):
+
+```python
+# paper/scripts/make_fig.py
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(5, 3))
+# ...
+plt.tight_layout()
+fig.savefig("paper/figures/sharpe_comparison.pdf", bbox_inches="tight")
+```
+
+Reference in LaTeX as:
+```latex
+\includegraphics[width=\linewidth]{figures/sharpe_comparison.pdf}
+```
+
 ## Your workflow per turn
 
 1. **First draft**: iterate through sections in order (abstract last). Each section should be publication-ready on first emission — not a stub.
