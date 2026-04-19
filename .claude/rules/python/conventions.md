@@ -7,6 +7,20 @@ paths:
 
 # Python conventions (loaded when working on Python files)
 
+## How to run Python (**mandatory**)
+
+**Always invoke Python via `uv run python ...`**, never bare `python`.
+
+- ✅ `uv run python experiments/X/run.py`
+- ✅ `uv run python -m orchestrator.state --dump`
+- ❌ `python experiments/X/run.py` — may hit system Python and miss project deps
+
+`uv run` activates `.venv/` transparently. Bare `python` happens to resolve to the
+venv when env is inherited cleanly, but don't rely on it — be explicit.
+
+To add a dependency: `uv add <pkg>` (writes to `pyproject.toml` + `uv.lock`, then
+`uv sync`). Never `pip install` anything.
+
 ## Style
 
 - Python 3.11+ features encouraged: `match`, `|` unions, `Self`, structural patterns

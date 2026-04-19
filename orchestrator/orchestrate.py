@@ -22,9 +22,17 @@ from rich.panel import Panel
 from .agent import PersistentAgent
 from .budget import MessageWindow
 from .events import emit
-from .state import db, experiments_summary, list_by_status
+from .run_log import setup_run_log
+from .state import db, experiments_summary, list_by_status, recover_stale_running
 
-console = Console()
+# Replaced at runtime with a tee'd console in main_async().
+# Default ensures imports and module-level Panel usage still work if someone
+# imports without calling main_async (e.g. interactive debugging).
+console: Console = Console()
+
+# Cumulative API-equivalent cost across the whole run. Reported at the end.
+# On Max subscription this is *not* what you're billed — just a compute gauge.
+_cumulative_cost_equiv: float = 0.0
 
 # --------------------------------------------------------------------------
 # Reset policy per role — THE key design decision
@@ -76,22 +84,81 @@ def build_agents() -> dict[str, PersistentAgent]:
 # --------------------------------------------------------------------------
 
 def render_event(agent_name: str, event: dict) -> None:
-    """Pretty-print a stream-json event from Claude Code to the console.
+    """Render a stream-json event from `claude -p` to the console.
     All events are ALSO recorded to events.jsonl for later analysis.
+
+    Claude Code's stream-json uses its own envelope format (not raw Anthropic API deltas):
+      - system/init              — session started
+      - stream_event             — real-time token deltas (needs --include-partial-messages)
+      - assistant                — full content block (tool_use, text)
+      - user                     — tool results
+      - result                   — final summary (cost, duration, turns)
     """
     t = event.get("type")
-    if t == "content_block_delta":
-        delta = event.get("delta") or {}
-        if delta.get("type") == "text_delta":
-            console.print(delta.get("text", ""), end="", markup=False, highlight=False)
-    elif t == "tool_use":
-        name = event.get("name", "?")
-        console.print(f"\n[dim][{agent_name}: tool_use {name}][/dim]")
-    elif t == "tool_result":
-        # Suppress verbose tool output; events.jsonl captures it
-        pass
-    elif t == "message_stop":
-        console.print()  # newline
+
+    if t == "system":
+        sub = event.get("subtype")
+        if sub == "init":
+            session_short = (event.get("session_id") or "?")[:8]
+            console.print(f"[dim]  ↳ session {session_short}…[/dim]")
+
+    elif t == "stream_event":
+        # Real-time token stream (from --include-partial-messages).
+        # Text / thinking appear here as they're generated.
+        inner = event.get("event") or {}
+        itype = inner.get("type")
+
+        if itype == "content_block_start":
+            block = inner.get("content_block") or {}
+            btype = block.get("type")
+            if btype == "thinking":
+                console.print("\n[dim italic]↳ thinking:[/dim italic] ", end="")
+            # tool_use is shown in the assistant event (has full input)
+
+        elif itype == "content_block_delta":
+            delta = inner.get("delta") or {}
+            dtype = delta.get("type")
+            if dtype == "text_delta":
+                console.print(delta.get("text", ""), end="", markup=False, highlight=False)
+            elif dtype == "thinking_delta":
+                console.print(delta.get("thinking", ""), end="", markup=False, highlight=False,
+                              style="dim italic")
+            # input_json_delta (tool args streaming): skip — noisy, shown in assistant event
+
+    elif t == "assistant":
+        # Full content block arrived. Text was already streamed via stream_event;
+        # we only display tool_use blocks here (they're not streamed as text).
+        msg = event.get("message") or {}
+        for block in msg.get("content") or []:
+            if block.get("type") == "tool_use":
+                name = block.get("name", "?")
+                inp = block.get("input") or {}
+                preview = str(inp).replace("\n", " ")[:100]
+                console.print(f"\n[cyan]⚒ {name}[/cyan] [dim]{preview}[/dim]")
+
+    elif t == "user":
+        # Usually tool results — brief indicator only (full content is in events.jsonl)
+        msg = event.get("message") or {}
+        for block in msg.get("content") or []:
+            if block.get("type") == "tool_result":
+                is_err = bool(block.get("is_error"))
+                icon = "[red]✗[/red]" if is_err else "[green]✓[/green]"
+                console.print(f"  {icon}", end="")
+
+    elif t == "result":
+        # Claude Code reports an API-equivalent cost in `total_cost_usd` even under
+        # a Max subscription. On subscription this figure is NOT what you're billed —
+        # the subscription covers it. We relabel to prevent sticker-shock confusion.
+        # Raw value is still kept in events.jsonl for any offline cost analysis.
+        cost = event.get("total_cost_usd")
+        dur = event.get("duration_ms", 0)
+        turns = event.get("num_turns", 0)
+        if cost is not None:
+            global _cumulative_cost_equiv
+            _cumulative_cost_equiv += cost
+        cost_str = f" · ~${cost:.3f} api-equiv" if cost is not None else ""
+        console.print(f"\n[dim]  ↳ {turns} turns · {dur / 1000:.1f}s{cost_str}[/dim]")
+
     elif t == "subprocess_error":
         console.print(Panel(
             f"[red]Subprocess failed (rc={event.get('returncode')})\n"
@@ -99,8 +166,9 @@ def render_event(agent_name: str, event: dict) -> None:
             title=f"{agent_name} ERROR",
         ))
 
-    # Always record
-    emit(f"agent.{t or 'unknown'}", agent=agent_name, **{k: v for k, v in event.items() if k != "type"})
+    # Always record to events.jsonl regardless of whether we rendered
+    emit(f"agent.{t or 'unknown'}", agent=agent_name,
+         **{k: v for k, v in event.items() if k != "type"})
 
 
 # --------------------------------------------------------------------------
@@ -219,6 +287,16 @@ async def run_round(config: Config, round_num: int, agents: dict, budget: Messag
     console.rule(f"[bold magenta]━━━ Round {round_num}/{config.rounds} ━━━[/bold magenta]")
     emit("round.start", round=round_num, summary=experiments_summary())
 
+    # Recover any stale `running` experiments orphaned by interrupted previous runs.
+    # Default threshold: 10 minutes — real in-progress experiments never sit that long
+    # without updates, since the orchestrator blocks on them.
+    recoveries = recover_stale_running()
+    if recoveries:
+        console.print(f"[yellow]↳ recovered {len(recoveries)} stale experiment(s):[/yellow]")
+        for r in recoveries:
+            console.print(f"  • {r['experiment_id'][:8]} → {r['action']} [dim]({r['reason']})[/dim]")
+        emit("recovery.stale_running", count=len(recoveries), actions=recoveries)
+
     await maybe_soft_reset(agents, round_num)
     await phase_literature_review(agents, budget)
     await phase_propose_experiments(agents, budget, round_num, config.experiments_per_round)
@@ -244,10 +322,16 @@ async def run_round(config: Config, round_num: int, agents: dict, budget: Messag
 
 
 async def main_async(config: Config) -> int:
+    global console  # must appear before any use/assignment of `console` in this scope
+
     foothold_path = Path("foothold.md")
     if not foothold_path.exists():
         console.print("[red]foothold.md not found. Create it (see README).[/red]")
         return 1
+
+    # Set up the tee'd console — everything printed is mirrored into logs/run-*.log
+    console, log_path, log_file = setup_run_log()
+    console.print(f"[dim]↳ logging to {log_path}[/dim]")
 
     agents = build_agents()
     budget = MessageWindow()
@@ -286,8 +370,17 @@ async def main_async(config: Config) -> int:
         emit("orchestrator.error", error=repr(e))
         raise
     finally:
-        emit("orchestrator.end", summary=experiments_summary(), budget=budget.summary())
+        emit("orchestrator.end",
+             summary=experiments_summary(),
+             budget=budget.summary(),
+             cumulative_cost_equiv_usd=round(_cumulative_cost_equiv, 4))
         console.print(f"\n[dim]{budget.summary()}[/dim]")
+        console.print(
+            f"[dim]  cumulative: ~${_cumulative_cost_equiv:.3f} api-equiv"
+            f" (subscription covers this)[/dim]"
+        )
+        console.print(f"[dim]↳ full log saved to {log_path}[/dim]")
+        log_file.close()
 
     return 0
 

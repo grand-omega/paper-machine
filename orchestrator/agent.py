@@ -9,10 +9,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid as uuid_mod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
+
+# macOS TeX Live (basictex / mactex) installs to a path that isn't on the default
+# subprocess PATH. Prepend it so `pdflatex`/`bibtex`/`tlmgr` resolve without the
+# agent having to `export PATH=...` on every bash call.
+_EXTRA_PATHS = ("/Library/TeX/texbin",)
+
+
+def _child_env() -> dict[str, str]:
+    """Env for claude subprocesses — inherits current env + prepends known tool paths."""
+    env = os.environ.copy()
+    existing = env.get("PATH", "")
+    to_add = [p for p in _EXTRA_PATHS if Path(p).exists() and p not in existing]
+    if to_add:
+        env["PATH"] = ":".join(to_add) + (":" + existing if existing else "")
+    return env
 
 
 @dataclass
@@ -99,6 +115,7 @@ class PersistentAgent:
             "--allowedTools", ",".join(self.allowed_tools),
             "--output-format", "stream-json",
             "--verbose",                              # include tool_use events
+            "--include-partial-messages",             # stream text deltas in real time
         ]
         if resume:
             cmd.extend(["--resume", session_id])
@@ -116,6 +133,7 @@ class PersistentAgent:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_child_env(),
         )
         assert proc.stdin is not None
         assert proc.stdout is not None

@@ -3,6 +3,7 @@ state/
 .agent_state/
 agent_results/
 events.jsonl
+logs/
 *.log
 
 # Python

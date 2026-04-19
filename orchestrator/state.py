@@ -13,7 +13,7 @@ import sqlite3
 import sys
 import uuid as uuid_mod
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -165,6 +165,81 @@ def experiments_summary() -> dict[str, int]:
             "SELECT status, COUNT(*) AS n FROM experiments GROUP BY status"
         ).fetchall()
     return {r["status"]: r["n"] for r in rows}
+
+
+def recover_stale_running(stale_after_seconds: int = 600) -> list[dict[str, Any]]:
+    """Recover `running` experiments orphaned by an interrupted previous run.
+
+    For each `running` row whose updated_at is older than `stale_after_seconds`:
+      - If `agent_results/<id>/results.json` exists and parses → auto-complete it
+      - Otherwise → mark as `failed` with an orphaning note
+
+    Returns a list of {experiment_id, action, reason} dicts describing what was done.
+    Safe to call on every orchestrator start — no-op if no stale rows exist.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    with db() as conn:
+        stale = conn.execute(
+            "SELECT id, hypothesis, updated_at FROM experiments "
+            "WHERE status='running' AND updated_at < ?",
+            (cutoff_str,),
+        ).fetchall()
+
+    actions: list[dict[str, Any]] = []
+    for row in stale:
+        eid = row["id"]
+        results_path = Path(f"agent_results/{eid}/results.json")
+        raw_log = Path(f"agent_results/{eid}/run.log")
+
+        if results_path.exists():
+            try:
+                results = json.loads(results_path.read_text())
+                complete_experiment(
+                    eid,
+                    results,
+                    raw_path=str(raw_log) if raw_log.exists() else None,
+                )
+                add_lesson(
+                    agent="orchestrator",
+                    experiment_id=eid,
+                    text="Recovered after interrupted run: results.json was on disk, auto-completed.",
+                )
+                actions.append({
+                    "experiment_id": eid,
+                    "action": "auto_completed",
+                    "reason": "results.json found on disk",
+                })
+            except (json.JSONDecodeError, OSError) as e:
+                fail_experiment(
+                    eid,
+                    error_excerpt=f"Recovery failed parsing results.json: {e}",
+                    raw_path=str(raw_log) if raw_log.exists() else None,
+                )
+                actions.append({
+                    "experiment_id": eid,
+                    "action": "marked_failed",
+                    "reason": f"results.json unreadable: {e}",
+                })
+        else:
+            fail_experiment(
+                eid,
+                error_excerpt="Orphaned — interrupted mid-run; no results.json on disk.",
+                raw_path=str(raw_log) if raw_log.exists() else None,
+            )
+            add_lesson(
+                agent="orchestrator",
+                experiment_id=eid,
+                text="Marked as failed: left in `running` by an interrupted run; no results.json produced.",
+            )
+            actions.append({
+                "experiment_id": eid,
+                "action": "marked_failed",
+                "reason": "orphaned without results",
+            })
+
+    return actions
 
 
 # -------- Lessons --------

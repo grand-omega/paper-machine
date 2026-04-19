@@ -16,7 +16,7 @@ The canonical procedure for running one experiment. Use this instead of ad-hoc b
 ### 1. Fetch the experiment spec
 
 ```bash
-python -m orchestrator.state --get {{experiment_id}}
+uv run python -m orchestrator.state --get {{experiment_id}}
 ```
 
 This prints the row as JSON. Read: `hypothesis`, `method`, `metric`, expected baseline/treatment comparison.
@@ -52,8 +52,8 @@ Your script must:
 ### 4. Mark running, execute, capture
 
 ```bash
-python -m orchestrator.state --set-status {{experiment_id}} running
-python experiments/{{experiment_id}}/run.py --output-dir agent_results/{{experiment_id}} \
+uv run python -m orchestrator.state --set-status {{experiment_id}} running
+uv run python experiments/{{experiment_id}}/run.py --output-dir agent_results/{{experiment_id}} \
     > agent_results/{{experiment_id}}/run.log 2>&1
 EXIT=$?
 ```
@@ -62,14 +62,14 @@ EXIT=$?
 
 On success:
 ```bash
-python -m orchestrator.state --complete {{experiment_id}} \
+uv run python -m orchestrator.state --complete {{experiment_id}} \
     --results agent_results/{{experiment_id}}/results.json \
     --raw-path agent_results/{{experiment_id}}/run.log
 ```
 
 On failure:
 ```bash
-python -m orchestrator.state --fail {{experiment_id}} \
+uv run python -m orchestrator.state --fail {{experiment_id}} \
     --error-excerpt "$(tail -n 50 agent_results/{{experiment_id}}/run.log)" \
     --raw-path agent_results/{{experiment_id}}/run.log
 ```
@@ -79,7 +79,7 @@ python -m orchestrator.state --fail {{experiment_id}} \
 If you learned something worth remembering next round:
 
 ```bash
-python -m orchestrator.state --add-lesson \
+uv run python -m orchestrator.state --add-lesson \
     --experiment {{experiment_id}} \
     --text "..."
 ```
@@ -96,5 +96,5 @@ After 3 attempts, mark failed with the error excerpt and move on. Don't loop for
 ## Don't
 
 - Don't hand-write results into SQLite without a real run
-- Don't call `sqlite3` directly — use `python -m orchestrator.state` helpers so the schema is validated
+- Don't call `sqlite3` directly — use `uv run python -m orchestrator.state` helpers so the schema is validated
 - Don't delete `agent_results/<id>/` even on failure — the reviewer may want to see what happened

@@ -9,12 +9,26 @@ Standard LaTeX build protocol. Handles the pdflatex → bibtex → pdflatex → 
 
 ## Procedure
 
+On macOS the TeX binaries live at `/Library/TeX/texbin/` but that path may not
+be inherited into the subprocess environment. **Always prepend it.**
+
 ```bash
+export PATH="/Library/TeX/texbin:$PATH"
 cd paper
 pdflatex -interaction=nonstopmode -halt-on-error main.tex > .build.log 2>&1
 bibtex main >> .build.log 2>&1
 pdflatex -interaction=nonstopmode -halt-on-error main.tex >> .build.log 2>&1
 pdflatex -interaction=nonstopmode -halt-on-error main.tex >> .build.log 2>&1
+```
+
+Shortcut: run all four in one shell so the PATH export applies to all:
+
+```bash
+cd paper && export PATH="/Library/TeX/texbin:$PATH" && \
+  pdflatex -interaction=nonstopmode -halt-on-error main.tex > .build.log 2>&1 && \
+  bibtex main >> .build.log 2>&1 && \
+  pdflatex -interaction=nonstopmode -halt-on-error main.tex >> .build.log 2>&1 && \
+  pdflatex -interaction=nonstopmode -halt-on-error main.tex >> .build.log 2>&1
 ```
 
 Check the last pdflatex exit code. If nonzero, extract the first error block:
