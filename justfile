@@ -69,6 +69,78 @@ reset-agent NAME:
     rm -f .agent_state/{{NAME}}.session
     @echo "✓ Reset {{NAME}}."
 
+# archive the current run's generated artifacts to archive/<timestamp>[-<label>]/
+# so you can compare / reproduce later, and clean the working tree for the next run.
+# Optional LABEL tags the archive: `just archive gemm-baseline` → archive/20260419-T-gemm-baseline/
+archive LABEL="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ts=$(date +%Y%m%d-%H%M%S)
+    label="{{LABEL}}"
+    if [ -n "$label" ]; then
+        dest="archive/${ts}-${label}"
+    else
+        dest="archive/${ts}"
+    fi
+    mkdir -p "$dest"
+    moved=0
+    # MOVE generated artifacts (remove from working tree → fresh next run)
+    for item in paper experiments agent_results state .agent_state events.jsonl logs; do
+        if [ -e "$item" ]; then
+            mv "$item" "$dest/"
+            echo "  moved   $item → $dest/"
+            moved=$((moved + 1))
+        fi
+    done
+    if [ $moved -eq 0 ]; then
+        echo "⚠ Nothing to archive — working tree is already clean."
+        rmdir "$dest" 2>/dev/null || true
+        exit 0
+    fi
+    # COPY context that's useful for reproduction but should stay in place
+    cp foothold.md "$dest/foothold.md"
+    echo "  copied  foothold.md → $dest/foothold.md"
+    if [ -d data ]; then
+        cp -R data "$dest/data"
+        echo "  copied  data/ → $dest/data/"
+    fi
+    # Metadata — git context + quick stats
+    git_sha=$(git rev-parse HEAD 2>/dev/null || echo "not-a-git-repo")
+    git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    git_dirty=$(git diff --quiet 2>/dev/null && echo "false" || echo "true")
+    n_exp=$(find "$dest/agent_results" -name results.json 2>/dev/null | wc -l | tr -d ' ')
+    pdf_size=$(stat -f %z "$dest/paper/main.pdf" 2>/dev/null || echo "0")
+    verdict=$(grep -A1 '^## Verdict' "$dest/paper/review.md" 2>/dev/null | tail -1 | head -c 40 || echo "")
+    cat > "$dest/metadata.json" <<JSON
+    {
+      "archived_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+      "run_id": "$ts",
+      "label": "$label",
+      "git_sha": "$git_sha",
+      "git_branch": "$git_branch",
+      "git_dirty": $git_dirty,
+      "experiments_with_results": $n_exp,
+      "paper_pdf_bytes": $pdf_size,
+      "review_verdict": "$verdict"
+    }
+    JSON
+    echo ""
+    echo "✓ Archived to $dest"
+    echo "  git sha: $git_sha (dirty=$git_dirty)"
+    echo "  experiments: $n_exp"
+    echo "  verdict: $verdict"
+
+# list existing archives with their key metadata
+archives:
+    @for d in archive/*/; do \
+        [ -d "$d" ] || continue; \
+        name=$(basename "$d"); \
+        verdict=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('review_verdict', ''))" 2>/dev/null || echo ""); \
+        nexp=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('experiments_with_results', 0))" 2>/dev/null || echo "?"); \
+        pdfkb=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('paper_pdf_bytes', 0) // 1024)" 2>/dev/null || echo "?"); \
+        printf "  %-40s  %s experiments  %s KB pdf  — %s\n" "$name" "$nexp" "$pdfkb" "$verdict"; \
+    done
+
 # nuke generated outputs inside the project root for a fresh run.
 # Principle: `clean` NEVER reaches outside the project dir.
 # Keeps: .claude/ config, orchestrator/ code, foothold.md, related_works/, uv.lock, .venv

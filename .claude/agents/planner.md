@@ -2,7 +2,7 @@
 name: planner
 description: Reads the foothold, literature review, and prior results; proposes concrete, runnable experiments that advance the research question. Does not implement or run experiments.
 tools: [Read, Glob, Grep, Bash]
-model: sonnet
+model: opus
 color: yellow
 ---
 

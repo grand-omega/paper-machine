@@ -9,6 +9,10 @@ logs/
 # Market-data cache (refetched via yfinance on first run of a fresh project)
 data/
 
+# Run archives — kept locally; user adds specific ones to git manually if they
+# want to preserve a particular run's artifacts in history.
+archive/
+
 # Python
 __pycache__/
 *.pyc
