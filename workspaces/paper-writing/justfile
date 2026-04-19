@@ -6,42 +6,43 @@ set shell := ["bash", "-uc"]
 default:
     @just --list
 
-# one-time setup (Python deps only)
+# one-time setup (Python deps + LaTeX container image)
 setup:
     uv sync
     @echo "✓ Python deps installed."
-    @echo "  Next: 'just setup-latex' (if basictex), then 'claude /login', then 'just run'"
+    @just build-image
+    @echo ""
+    @echo "  Next: 'claude /login' (once), then 'just run'"
 
-# one-time: install LaTeX packages the paper-writer commonly needs (basictex users only)
-# Requires sudo. If you have mactex-no-gui, you already have everything.
-# Note: tabularx, array, multicol etc. ship bundled in basictex under the `tools` package
-# and don't need to be named here.
-setup-latex:
-    @echo "Installing common LaTeX packages via tlmgr (requires sudo)..."
-    sudo /Library/TeX/texbin/tlmgr update --self
-    sudo /Library/TeX/texbin/tlmgr install \
-        booktabs caption siunitx microtype \
-        titling titlesec enumitem \
-        pgfplots biblatex biber \
-        csquotes multirow \
-        xcolor etoolbox
+# one-time: build the LaTeX container image used by paper-writer.
+# Uses podman if available (preferred — server target), else docker.
+# First build downloads ~800 MB base + tlmgr installs; subsequent builds cache.
+build-image:
+    @engine=$(command -v podman || command -v docker); \
+    if [ -z "$engine" ]; then \
+        echo "error: podman or docker required"; exit 1; \
+    fi; \
+    echo "→ building with $engine..."; \
+    "$engine" build -t paper-machine-latex:latest -f Containerfile .
+    @echo "✓ paper-machine-latex:latest ready"
     @just verify-latex
 
-# verify all expected LaTeX packages are findable via kpsewhich
+# verify the LaTeX container has all expected packages
 verify-latex:
-    @export PATH="/Library/TeX/texbin:$PATH" && \
-    missing=0; \
-    for pkg in booktabs caption siunitx microtype titling titlesec enumitem pgfplots biblatex csquotes multirow tabularx xcolor etoolbox; do \
-        if ! kpsewhich $pkg.sty > /dev/null 2>&1; then \
-            echo "✗ $pkg  ← missing"; \
-            missing=$((missing + 1)); \
-        fi; \
-    done; \
-    if [ $missing -eq 0 ]; then \
-        echo "✓ All expected LaTeX packages present."; \
-    else \
-        echo "⚠ $missing package(s) missing — install with 'sudo tlmgr install <name>'"; \
-        exit 1; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=0
+    for pkg in booktabs caption siunitx microtype titling titlesec enumitem pgfplots biblatex csquotes multirow tabularx xcolor etoolbox; do
+        if ! scripts/run-latex kpsewhich "$pkg.sty" > /dev/null 2>&1; then
+            echo "✗ $pkg  ← missing"
+            missing=$((missing + 1))
+        fi
+    done
+    if [ $missing -eq 0 ]; then
+        echo "✓ All expected LaTeX packages present in container."
+    else
+        echo "⚠ $missing package(s) missing — add them to Containerfile's tlmgr install and 'just build-image'"
+        exit 1
     fi
 
 # run a single round of the pipeline
