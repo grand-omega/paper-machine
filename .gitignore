@@ -1,0 +1,28 @@
+# Runtime state
+state/
+.agent_state/
+agent_results/
+events.jsonl
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# Claude Code personal overrides
+.claude/settings.local.json
+
+# LaTeX build artifacts (regenerable by compile-latex skill)
+paper/main.pdf
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc

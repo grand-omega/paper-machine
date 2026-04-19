@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)",
+
+      "Write(experiments/**)",
+      "Write(agent_results/**)",
+      "Write(paper/**)",
+      "Write(state/literature_review.md)",
+
+      "Edit(experiments/**)",
+      "Edit(agent_results/**)",
+      "Edit(paper/**)",
+
+      "Bash(python:*)",
+      "Bash(uv:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(pdflatex:*)",
+      "Bash(bibtex:*)",
+      "Bash(latexmk:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(pdfinfo:*)",
+
+      "Skill(run-experiment)",
+      "Skill(compile-latex)"
+    ],
+    "deny": [
+      "Edit(foothold.md)",
+      "Edit(CLAUDE.md)",
+      "Edit(.claude/**)",
+      "Edit(orchestrator/**)",
+      "Edit(pyproject.toml)",
+      "Edit(justfile)",
+      "Edit(.gitignore)",
+
+      "Write(foothold.md)",
+      "Write(.claude/**)",
+      "Write(orchestrator/**)",
+
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout --:*)",
+      "Bash(git clean:*)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(pip install:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(brew install:*)"
+    ]
+  }
+}
