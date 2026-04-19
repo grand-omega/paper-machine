@@ -31,6 +31,10 @@ build-image:
 verify-latex:
     #!/usr/bin/env bash
     set -euo pipefail
+    # scripts/run-latex refuses to start without $(pwd)/paper to mount.
+    # kpsewhich doesn't care about the mount, but the wrapper's precondition
+    # still applies — so ensure the dir exists before probing.
+    mkdir -p paper
     missing=0
     for pkg in booktabs caption siunitx microtype titling titlesec enumitem pgfplots biblatex csquotes multirow tabularx xcolor etoolbox; do
         if ! scripts/run-latex kpsewhich "$pkg.sty" > /dev/null 2>&1; then
