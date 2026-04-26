@@ -1,0 +1,27 @@
+# TeX Live container for the paper-writing workspace.
+# Used by paper-writer via scripts/run-latex wrapper.
+# Build: `just build-image`
+# Mount: $(pwd)/paper → /paper
+#
+# Base image is ~800 MB; tlmgr-installed packages bring it to ~1.2 GB total.
+
+FROM docker.io/texlive/texlive:latest-basic
+
+# Install the packages paper-writer commonly reaches for. These match the
+# list in the previous host-side `just setup-latex` recipe.
+RUN tlmgr update --self \
+ && tlmgr install \
+      booktabs caption siunitx microtype \
+      titling titlesec enumitem \
+      pgfplots biblatex biber \
+      csquotes multirow \
+      xcolor etoolbox \
+ && mktexlsr \
+ && rm -rf /tmp/*
+
+WORKDIR /paper
+
+# Override texlive's default entrypoint so the wrapper can invoke arbitrary
+# commands (pdflatex, biber, kpsewhich, pdftotext, etc.)
+ENTRYPOINT []
+CMD ["/bin/bash"]

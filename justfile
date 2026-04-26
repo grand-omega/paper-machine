@@ -1,176 +1,63 @@
-# new-paper-machine — common commands
+# paper-machine — top-level dispatcher
+#
+# Each research workspace lives under workspaces/<name>/ with its own
+# .claude/, pyproject.toml, .venv, and justfile. This top-level justfile
+# just forwards to the right workspace.
+#
+# Direct usage also works: `cd workspaces/paper-writing && just run`.
 
 set shell := ["bash", "-uc"]
 
-# show available recipes
+# default: show available workspaces and top-level recipes
 default:
     @just --list
+    @echo ""
+    @echo "Workspaces:"
+    @just workspaces
 
-# one-time setup (Python deps only)
-setup:
-    uv sync
-    @echo "✓ Python deps installed."
-    @echo "  Next: 'just setup-latex' (if basictex), then 'claude /login', then 'just run'"
-
-# one-time: install LaTeX packages the paper-writer commonly needs (basictex users only)
-# Requires sudo. If you have mactex-no-gui, you already have everything.
-# Note: tabularx, array, multicol etc. ship bundled in basictex under the `tools` package
-# and don't need to be named here.
-setup-latex:
-    @echo "Installing common LaTeX packages via tlmgr (requires sudo)..."
-    sudo /Library/TeX/texbin/tlmgr update --self
-    sudo /Library/TeX/texbin/tlmgr install \
-        booktabs caption siunitx microtype \
-        titling titlesec enumitem \
-        pgfplots biblatex biber \
-        csquotes multirow \
-        xcolor etoolbox
-    @just verify-latex
-
-# verify all expected LaTeX packages are findable via kpsewhich
-verify-latex:
-    @export PATH="/Library/TeX/texbin:$PATH" && \
-    missing=0; \
-    for pkg in booktabs caption siunitx microtype titling titlesec enumitem pgfplots biblatex csquotes multirow tabularx xcolor etoolbox; do \
-        if ! kpsewhich $pkg.sty > /dev/null 2>&1; then \
-            echo "✗ $pkg  ← missing"; \
-            missing=$((missing + 1)); \
-        fi; \
-    done; \
-    if [ $missing -eq 0 ]; then \
-        echo "✓ All expected LaTeX packages present."; \
-    else \
-        echo "⚠ $missing package(s) missing — install with 'sudo tlmgr install <name>'"; \
-        exit 1; \
-    fi
-
-# run a single round of the pipeline
-run:
-    uv run python -m orchestrator.orchestrate --rounds 1
-
-# run N rounds
-run-rounds N:
-    uv run python -m orchestrator.orchestrate --rounds {{N}}
-
-# dump all experiments as JSON
-experiments:
-    uv run python -m orchestrator.state --dump
-
-# fetch QQQM historical data (for quant-trading foothold). Writes data/qqqm.csv.
-# Idempotent: safe to re-run whenever you want a fresh snapshot.
-# Strips timezone and drops the index so `pd.read_csv('data/qqqm.csv',
-# parse_dates=['Date'])` just works.
-fetch-qqqm:
-    @mkdir -p data
-    uv run python -c "import yfinance as yf; df = yf.Ticker('QQQM').history(period='max', auto_adjust=True); df.index = df.index.tz_localize(None); df = df.reset_index(); df.to_csv('data/qqqm.csv', index=False); print(f'✓ wrote data/qqqm.csv ({len(df)} rows, {df.Date.iloc[0].date()} → {df.Date.iloc[-1].date()})')"
-
-# hard-reset a specific agent (wipes its session UUID; next call starts fresh)
-reset-agent NAME:
-    rm -f .agent_state/{{NAME}}.session
-    @echo "✓ Reset {{NAME}}."
-
-# archive the current run's generated artifacts to archive/<timestamp>[-<label>]/
-# so you can compare / reproduce later, and clean the working tree for the next run.
-# Optional LABEL tags the archive: `just archive gemm-baseline` → archive/20260419-T-gemm-baseline/
-archive LABEL="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ts=$(date +%Y%m%d-%H%M%S)
-    label="{{LABEL}}"
-    if [ -n "$label" ]; then
-        dest="archive/${ts}-${label}"
-    else
-        dest="archive/${ts}"
-    fi
-    mkdir -p "$dest"
-    moved=0
-    # MOVE generated artifacts (remove from working tree → fresh next run)
-    for item in paper experiments agent_results state .agent_state events.jsonl logs; do
-        if [ -e "$item" ]; then
-            mv "$item" "$dest/"
-            echo "  moved   $item → $dest/"
-            moved=$((moved + 1))
-        fi
-    done
-    if [ $moved -eq 0 ]; then
-        echo "⚠ Nothing to archive — working tree is already clean."
-        rmdir "$dest" 2>/dev/null || true
-        exit 0
-    fi
-    # COPY context that's useful for reproduction but should stay in place
-    cp foothold.md "$dest/foothold.md"
-    echo "  copied  foothold.md → $dest/foothold.md"
-    if [ -d data ]; then
-        cp -R data "$dest/data"
-        echo "  copied  data/ → $dest/data/"
-    fi
-    # Metadata — git context + quick stats
-    git_sha=$(git rev-parse HEAD 2>/dev/null || echo "not-a-git-repo")
-    git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-    git_dirty=$(git diff --quiet 2>/dev/null && echo "false" || echo "true")
-    n_exp=$(find "$dest/agent_results" -name results.json 2>/dev/null | wc -l | tr -d ' ')
-    pdf_size=$(stat -f %z "$dest/paper/main.pdf" 2>/dev/null || echo "0")
-    verdict=$(grep -A1 '^## Verdict' "$dest/paper/review.md" 2>/dev/null | tail -1 | head -c 40 || echo "")
-    cat > "$dest/metadata.json" <<JSON
-    {
-      "archived_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "run_id": "$ts",
-      "label": "$label",
-      "git_sha": "$git_sha",
-      "git_branch": "$git_branch",
-      "git_dirty": $git_dirty,
-      "experiments_with_results": $n_exp,
-      "paper_pdf_bytes": $pdf_size,
-      "review_verdict": "$verdict"
-    }
-    JSON
-    echo ""
-    echo "✓ Archived to $dest"
-    echo "  git sha: $git_sha (dirty=$git_dirty)"
-    echo "  experiments: $n_exp"
-    echo "  verdict: $verdict"
-
-# list existing archives with their key metadata
-archives:
-    @for d in archive/*/; do \
+# list research workspaces
+workspaces:
+    @for d in workspaces/*/; do \
         [ -d "$d" ] || continue; \
         name=$(basename "$d"); \
-        verdict=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('review_verdict', ''))" 2>/dev/null || echo ""); \
-        nexp=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('experiments_with_results', 0))" 2>/dev/null || echo "?"); \
-        pdfkb=$(python3 -c "import json; m = json.load(open('$d/metadata.json')); print(m.get('paper_pdf_bytes', 0) // 1024)" 2>/dev/null || echo "?"); \
-        printf "  %-40s  %s experiments  %s KB pdf  — %s\n" "$name" "$nexp" "$pdfkb" "$verdict"; \
+        has_foothold=$([ -f "$d/foothold.md" ] && echo "✓" || echo "✗"); \
+        has_venv=$([ -d "$d/.venv" ] && echo "✓" || echo "✗"); \
+        printf "  %-24s  foothold=%s venv=%s\n" "$name" "$has_foothold" "$has_venv"; \
     done
 
-# nuke generated outputs inside the project root for a fresh run.
-# Principle: `clean` NEVER reaches outside the project dir.
-# Keeps: .claude/ config, orchestrator/ code, foothold.md, related_works/, uv.lock, .venv
-# Removes: SQLite state, agent UUIDs, experiments/, paper/, logs, caches
-#
-# Note: Claude Code session transcripts live at
-#   ~/.claude/projects/-Users-yanwenxu-Desktop-new-paper-machine/*.jsonl
-# These become orphaned (nothing points to them) after `clean` but take disk
-# space. Delete manually if you care: `rm -rf ~/.claude/projects/<path-slug>`.
-# Since .agent_state/ is wiped, the next run creates fresh session UUIDs —
-# orphaned transcripts don't affect behavior, just occupy disk.
-clean:
-    @echo "Removing runtime state..."
-    rm -rf state/ .agent_state/ agent_results/ events.jsonl logs/
-    @echo "Removing generated paper + experiment scripts..."
-    rm -rf paper/ experiments/
-    @echo "Removing Python + linter caches..."
-    rm -rf orchestrator/__pycache__/ .ruff_cache/
-    @echo "✓ Clean (project-root only — orphaned Claude Code transcripts in ~/.claude/projects/ remain)."
+# run a workspace's pipeline: `just run paper-writing`
+run WORKSPACE *ARGS:
+    @cd workspaces/{{WORKSPACE}} && just run {{ARGS}}
 
-# same as `clean` but keeps paper/ and experiments/ (for comparing output across runs)
-clean-soft:
-    rm -rf state/ .agent_state/ agent_results/ events.jsonl logs/
-    rm -rf orchestrator/__pycache__/ .ruff_cache/
-    @echo "✓ Clean (kept paper/ and experiments/ for reference)."
+# run N rounds in a workspace: `just run-rounds paper-writing 3`
+run-rounds WORKSPACE N:
+    @cd workspaces/{{WORKSPACE}} && just run-rounds {{N}}
 
-# tail the latest run log (follows as it's written)
-tail-log:
-    @tail -f $(ls -t logs/run-*.log | head -1)
+# archive a workspace's current run: `just archive paper-writing gemm-baseline`
+archive WORKSPACE LABEL="":
+    @cd workspaces/{{WORKSPACE}} && just archive {{LABEL}}
 
-# show the latest run log (from the top)
-last-log:
-    @less -R $(ls -t logs/run-*.log | head -1)
+# list archives in a workspace
+archives WORKSPACE:
+    @cd workspaces/{{WORKSPACE}} && just archives
+
+# dump experiment state for a workspace
+experiments WORKSPACE:
+    @cd workspaces/{{WORKSPACE}} && just experiments
+
+# clean a workspace's runtime state
+clean WORKSPACE:
+    @cd workspaces/{{WORKSPACE}} && just clean
+
+# reset one agent's memory in a workspace: `just reset-agent paper-writing coder`
+reset-agent WORKSPACE NAME:
+    @cd workspaces/{{WORKSPACE}} && just reset-agent {{NAME}}
+
+# sync all deps: framework at root, then each workspace
+sync:
+    @echo "→ syncing framework..." && uv sync
+    @for d in workspaces/*/; do \
+        [ -d "$d" ] || continue; \
+        echo "→ syncing workspace $(basename "$d")..."; \
+        (cd "$d" && uv sync); \
+    done

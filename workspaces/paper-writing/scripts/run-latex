@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# scripts/run-latex — transparent container wrapper for the LaTeX toolchain.
+#
+# Usage (from the workspace root):
+#   scripts/run-latex pdflatex -interaction=nonstopmode main.tex
+#   scripts/run-latex biber main
+#   scripts/run-latex kpsewhich pgfplots.sty
+#   scripts/run-latex pdftotext -layout main.pdf -
+#
+# Design:
+#   - Mounts $(pwd)/paper into /paper in the container.
+#   - Podman preferred (the server uses it; rootless-safe), Docker fallback.
+#   - `USE_LATEX_CONTAINER=0` runs the command natively instead — useful for
+#     fast local iteration when you have LaTeX installed on the host.
+
+set -euo pipefail
+
+if [ "${USE_LATEX_CONTAINER:-1}" = "0" ]; then
+    # Native fallback — caller is responsible for having the tool on PATH.
+    exec "$@"
+fi
+
+# Prefer podman (matches deployment target), fall back to docker.
+ENGINE="${CONTAINER_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+    if command -v podman >/dev/null 2>&1; then
+        ENGINE="podman"
+    elif command -v docker >/dev/null 2>&1; then
+        ENGINE="docker"
+    else
+        echo "error: run-latex needs podman or docker on PATH." >&2
+        echo "       Or set USE_LATEX_CONTAINER=0 and use a host-native LaTeX." >&2
+        exit 1
+    fi
+fi
+
+IMAGE="${LATEX_IMAGE:-paper-machine-latex:latest}"
+PAPER_DIR="${PAPER_DIR:-$(pwd)/paper}"
+
+if [ ! -d "$PAPER_DIR" ]; then
+    echo "error: paper/ directory not found at $PAPER_DIR" >&2
+    echo "       Run from the workspace root, or set PAPER_DIR." >&2
+    exit 1
+fi
+
+# The :Z relabel option is podman/SELinux-specific; docker ignores it.
+# --userns=keep-id lets podman write back as the host user (no root-owned files).
+# rm --rm so we don't accumulate dead containers.
+EXTRA_ARGS=()
+if [ "$ENGINE" = "podman" ]; then
+    EXTRA_ARGS+=("--userns=keep-id")
+fi
+
+exec "$ENGINE" run --rm \
+    "${EXTRA_ARGS[@]}" \
+    -v "$PAPER_DIR:/paper:Z" \
+    -w /paper \
+    "$IMAGE" \
+    "$@"
