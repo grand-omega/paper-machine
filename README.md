@@ -1,4 +1,4 @@
-# new-paper-machine
+# AGN Paper Machine
 
 Autonomous research-paper pipeline built on **Claude Code** as the runtime.
 
